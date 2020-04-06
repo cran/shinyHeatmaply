@@ -42,7 +42,11 @@ output$data=renderUI({
 
 #Color Pallete UI ----
 output$colUI<-renderUI({
-  colSel=ifelse(input$transform_fun=='cor','RdBu','Vidiris')
+  
+  colSel='Vidiris'
+  if(input$transform_fun=='cor') colSel='RdBu'
+  if(input$transform_fun=='is.na10') colSel='grey.colors'
+  
   selectizeInput(inputId ="pal", label ="Select Color Palette",
                  choices = c('Vidiris (Sequential)'="viridis",
                              'Magma (Sequential)'="magma",
@@ -120,14 +124,18 @@ interactiveHeatmap<- reactive({
   # ss_num = sapply(data.in,function(x) class(x)) %in% c('numeric','integer') # in order to only transform the numeric values
   
   if(length(input$annoVar)>0){
-    if(all(input$annoVar%in%names(data.in))) data.in=data.in%>%mutate_each_(funs(factor),input$annoVar)
+    if(all(input$annoVar%in%names(data.in))) 
+      data.in <- data.in%>%mutate_at(funs(factor),.vars=vars(input$annoVar))
   } 
   
   ss_num =  sapply(data.in, is.numeric) # in order to only transform the numeric values
-    
+
   if(input$transpose) data.in=t(data.in)
   if(input$transform_fun!='.'){
-    if(input$transform_fun=='is.na10') data.in=is.na10(data.in)
+    if(input$transform_fun=='is.na10'){
+      updateCheckboxInput(session = session,inputId = 'showColor',value = T)
+      data.in[, ss_num]=is.na10(data.in[, ss_num])
+    } 
     if(input$transform_fun=='cor'){
       updateCheckboxInput(session = session,inputId = 'showColor',value = T)
       updateCheckboxInput(session = session,inputId = 'colRngAuto',value = F)
@@ -135,11 +143,12 @@ interactiveHeatmap<- reactive({
     }
     if(input$transform_fun=='log') data.in[, ss_num]= apply(data.in[, ss_num],2,log)
     if(input$transform_fun=='sqrt') data.in[, ss_num]= apply(data.in[, ss_num],2,sqrt) 
-    if(input$transform_fun=='normalize') data.in=normalize(data.in)
+    if(input$transform_fun=='normalize') data.in=heatmaply::normalize(data.in)
     if(input$transform_fun=='scale') data.in[, ss_num] = scale(data.in[, ss_num])
-    if(input$transform_fun=='percentize') data.in=percentize(data.in)
+    if(input$transform_fun=='percentize') data.in=heatmaply::percentize(data.in)
   } 
-      
+  
+
       
   if(!is.null(input$tables_true_search_columns)) 
     data.in=data.in[activeRows(input$tables_true_search_columns,data.in),]
@@ -155,7 +164,7 @@ interactiveHeatmap<- reactive({
   hclustfun_row = function(x) hclust(x, method = input$hclustFun_row)
   hclustfun_col = function(x) hclust(x, method = input$hclustFun_col)
   
-  heatmaply(data.in,
+  p <- heatmaply(data.in,
             main = input$main,xlab = input$xlab,ylab = input$ylab,
             row_text_angle = input$row_text_angle,
             column_text_angle = input$column_text_angle,
@@ -170,8 +179,11 @@ interactiveHeatmap<- reactive({
             k_col = input$c, 
             k_row = input$r,
             limits = ColLimits) %>% 
-    layout(margin = list(l = input$l, b = input$b))
+    layout(margin = list(l = input$l, b = input$b, r='0px'))
     
+  p$elementId <- NULL
+  
+  p
 })
 
 #Render Plot ----
@@ -235,10 +247,10 @@ observeEvent({interactiveHeatmap()},{
   
   output$downloadData <- downloadHandler(
     filename = function() {
-      paste("heatmaply-", gsub(' ','_',Sys.time()), ".html", sep="")
+      paste0("heatmaply-", strftime(Sys.time(),'%Y%m%d_%H%M%S'), ".html")
     },
     content = function(file) {
-      libdir <- paste(tools::file_path_sans_ext(basename(file)),"_files", sep = "")
+      libdir <- paste0(tools::file_path_sans_ext(basename(file)),"_files")
 
       htmltools::save_html(htmltools::browsable(htmltools::tagList(h,s)),file=file,libdir = libdir)
       if (!htmlwidgets:::pandoc_available()) {

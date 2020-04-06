@@ -46,7 +46,7 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
                            htmltools::h4('Color Manipulation'),
                            shiny::uiOutput('colUI'),
                            shiny::sliderInput("ncol", "Set Number of Colors", min = 1, max = 256, value = 256),
-                           shiny::checkboxInput('colRngAuto','Auto Color Range',value = T),
+                           shiny::checkboxInput('colRngAuto','Auto Color Range',value = TRUE),
                            shiny::conditionalPanel('!input.colRngAuto',shiny::uiOutput('colRng'))
           ),
           
@@ -79,7 +79,7 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
                      plotly::plotlyOutput("heatout",height=paste0(plotHeight,'px'))
             ),
             shiny::tabPanel("Data",
-                     DT::dataTableOutput('tables')
+                     shiny::dataTableOutput('tables')
             )
           ) 
         )
@@ -87,7 +87,15 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
     )
   )
 #Server---- 
-
+#' @import shiny
+#' @import htmltools
+#' @importFrom plotly plotlyOutput layout renderPlotly
+#' @importFrom dplyr mutate_at vars
+#' @import heatmaply
+#' @importFrom stats cor dist hclust
+#' @importFrom xtable xtable
+#' @importFrom tools file_path_sans_ext
+#' @importFrom rmarkdown pandoc_available pandoc_self_contained_html
   server <- function(input, output,session) {	
     
     output$data=shiny::renderUI({
@@ -109,7 +117,7 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
           NM=names(data.in)[which(sapply(data.in,class)=='factor')]  
         } 
         shiny::column(width=4,
-                      shiny::selectizeInput('annoVar','Annotation',choices = names(data.in),selected=NM,multiple=T,options = list(placeholder = 'select columns',plugins = list("remove_button")))
+                      shiny::selectizeInput('annoVar','Annotation',choices = names(data.in),selected=NM,multiple=TRUE,options = list(placeholder = 'select columns',plugins = list("remove_button")))
         )
       })
       
@@ -118,13 +126,16 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
         list(
           shiny::column(4,shiny::textInput(inputId = 'setSeed',label = 'Seed',value = sample(1:10000,1))),
           shiny::column(4,shiny::numericInput(inputId = 'selRows',label = 'Number of Rows',min=1,max=pmin(500,nrow(data.sel())),value = pmin(500,nrow(data.sel())))),
-          shiny::column(4,shiny::selectizeInput('selCols','Columns Subset',choices = names(data.sel()),multiple=T))
+          shiny::column(4,shiny::selectizeInput('selCols','Columns Subset',choices = names(data.sel()),multiple=TRUE))
         )
       })
     })
     
     output$colUI<-shiny::renderUI({
-      colSel=ifelse(input$transform_fun=='cor','RdBu','Vidiris')
+      colSel='Vidiris'
+      if(input$transform_fun=='cor') colSel='RdBu'
+      if(input$transform_fun=='is.na10') colSel='grey.colors'
+      
       shiny::selectizeInput(inputId ="pal", label ="Select Color Palette",
                      choices = c('Vidiris (Sequential)'="viridis",
                                  'Magma (Sequential)'="magma",
@@ -187,17 +198,21 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
       }
       
       if(length(input$annoVar)>0){
-        if(all(input$annoVar%in%names(data.in))) data.in=data.in%>%mutate_each_(funs(factor),input$annoVar)
+        if(all(input$annoVar%in%names(data.in))) 
+          data.in <- data.in%>%dplyr::mutate_at(dplyr::vars(input$annoVar),list(factor))
       } 
       
       ss_num =  sapply(data.in, is.numeric) # in order to only transform the numeric values
       
       if(input$transpose) data.in=t(data.in)
       if(input$transform_fun!='.'){
-        if(input$transform_fun=='is.na10') data.in=heatmaply::is.na10(data.in)
+        if(input$transform_fun=='is.na10'){
+          shiny::updateCheckboxInput(session = session,inputId = 'showColor',value = TRUE)
+          data.in[, ss_num] = heatmaply::is.na10(data.in[, ss_num])
+        } 
         if(input$transform_fun=='cor'){
-          shiny::updateCheckboxInput(session = session,inputId = 'showColor',value = T)
-          shiny::updateCheckboxInput(session = session,inputId = 'colRngAuto',value = F)
+          shiny::updateCheckboxInput(session = session,inputId = 'showColor',value = TRUE)
+          shiny::updateCheckboxInput(session = session,inputId = 'colRngAuto',value = FALSE)
           data.in=stats::cor(data.in[, ss_num],use = "pairwise.complete.obs")
         }
         if(input$transform_fun=='log') data.in[, ss_num]= apply(data.in[, ss_num],2,log)
@@ -222,7 +237,7 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
       hclustfun_row = function(x) stats::hclust(x, method = input$hclustFun_row)
       hclustfun_col = function(x) stats::hclust(x, method = input$hclustFun_col)
       
-      heatmaply::heatmaply(data.in,
+      p <- heatmaply::heatmaply(data.in,
                 main = input$main,xlab = input$xlab,ylab = input$ylab,
                 row_text_angle = input$row_text_angle,
                 column_text_angle = input$column_text_angle,
@@ -239,6 +254,10 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
                 limits = ColLimits) %>% 
         plotly::layout(margin = list(l = input$l, b = input$b))
       
+      p$elementId <- NULL
+      
+      p
+      
     })
     
     shiny::observeEvent(data.sel(),{
@@ -247,7 +266,7 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
       })
     })
     
-    output$tables=DT::renderDataTable(data.sel(),server = T,filter='top',
+    output$tables=shiny::renderDataTable(data.sel(),server = TRUE,filter='top',
                                   extensions = c('Scroller','FixedHeader','FixedColumns','Buttons','ColReorder'),
                                   options = list(
                                     dom = 't',
@@ -282,9 +301,9 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
       )
       
       
-      l=data.frame(Parameter=names(l),Value=do.call('rbind',l),row.names = NULL,stringsAsFactors = F)
+      l=data.frame(Parameter=names(l),Value=do.call('rbind',l),row.names = NULL,stringsAsFactors = FALSE)
       l[which(l$Value==''),2]='NULL'
-      paramTbl=print(xtable::xtable(l),type = 'html',include.rownames=FALSE,print.results = F,html.table.attributes = c('border=0'))
+      paramTbl=print(xtable::xtable(l),type = 'html',include.rownames=FALSE,print.results = FALSE,html.table.attributes = c('border=0'))
       
       
       h$width='100%'
@@ -299,20 +318,19 @@ viewer<-do.call(eval(parse(text=paste0('shiny::',viewerType))),viewerDots)
       
       output$downloadData <- shiny::downloadHandler(
         filename = function() {
-          paste("heatmaply-", gsub(' ','_',Sys.time()), ".html", sep="")
+          paste0("heatmaply-", strftime(Sys.time(),'%Y%m%d_%H%M%S'), ".html")
         },
         content = function(file) {
-          libdir <- paste(tools::file_path_sans_ext(basename(file)),"_files", sep = "")
+          libdir <- paste0(tools::file_path_sans_ext(basename(file)),"_files")
           
           htmltools::save_html(htmltools::browsable(htmltools::tagList(h,s)),file=file,libdir = libdir)
-          # if (!htmlwidgets:::pandoc_available()) {
-          if (!pandoc_available()) {
+
+          if (!rmarkdown::pandoc_available()) {
             stop("Saving a widget with selfcontained = TRUE requires pandoc. For details see:\n", 
                  "https://github.com/rstudio/rmarkdown/blob/master/PANDOC.md")
           }
           
-          # htmlwidgets:::pandoc_self_contained_html(file, file)
-          pandoc_self_contained_html(file, file)
+          rmarkdown::pandoc_self_contained_html(file, file)
           unlink(libdir, recursive = TRUE)
         }
       )
